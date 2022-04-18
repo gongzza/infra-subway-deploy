@@ -60,3 +60,11 @@ resource "aws_subnet" "main_subnet_bastion" {
     Name = "main_subnet_bastion"
   }
 }
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "terraform-101-igw"
+  }
+}
