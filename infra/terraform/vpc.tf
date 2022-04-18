@@ -43,7 +43,7 @@ resource "aws_subnet" "main_subnet_private" {
   vpc_id = aws_vpc.main.id
   cidr_block = "${local.subnet.private[0]}"
 
-  availability_zone = "${data.aws_availability_zones.available.names[0]}"
+  availability_zone = "${data.aws_availability_zones.available.names[1]}"
   
   tags = {
     Name = "main_subnet_private"
@@ -54,7 +54,7 @@ resource "aws_subnet" "main_subnet_bastion" {
   vpc_id = aws_vpc.main.id
   cidr_block = "${local.subnet.bastion[0]}"
 
-  availability_zone = "${data.aws_availability_zones.available.names[1]}"
+  availability_zone = "${data.aws_availability_zones.available.names[0]}"
   
   tags = {
     Name = "main_subnet_bastion"
@@ -131,5 +131,72 @@ resource "aws_security_group" "sg_main_bastion" {
     to_port = 22
     protocol = "tcp"
     cidr_blocks = ["${chomp(data.http.myip.body)}/32"]
+  }
+}
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+
+resource "aws_instance" "web" {
+  ami = "${data.aws_ami.ubuntu.id}"
+  instance_type = "t2.micro"
+  subnet_id = aws_subnet.main_subnet_public[0].id
+  associate_public_ip_address = true
+
+  vpc_security_group_ids = [
+    aws_security_group.sg_main_external.id
+  ]
+
+  tags = {
+    "Name" = "ec2-web"
+  }
+}
+
+resource "aws_instance" "db" {
+  ami = data.aws_ami.ubuntu.id
+  instance_type = "t3.micro"
+  subnet_id = aws_subnet.main_subnet_private.id
+
+  vpc_security_group_ids = [
+    aws_security_group.sg_main_internal.id
+  ]
+
+  tags = {
+    "Name" = "ec2-db"
+  }
+}
+
+resource "aws_instance" "bastion" {
+  ami = data.aws_ami.ubuntu.id
+  instance_type = "t2.micro"
+  subnet_id = aws_subnet.main_subnet_bastion.id
+  associate_public_ip_address = true
+
+  vpc_security_group_ids = [
+    aws_security_group.sg_main_bastion.id
+  ]
+
+  user_data = <<-EOF
+    #!/bin/bash
+    sudo amazon-linux-extras install nginx1.12 -y
+    sudo nginx
+  EOF
+
+
+  tags = {
+    "Name" = "ec2-bastion"
   }
 }
