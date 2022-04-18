@@ -65,6 +65,14 @@ resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "terraform-101-igw"
+    Name = "main"
+  }
+}
+
+resource "aws_route_table" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    "Name" = "main"
   }
 }
