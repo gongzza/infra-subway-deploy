@@ -1,0 +1,235 @@
+variable "region" {
+  default     = "ap-northeast-3"
+  description = "AWS region"
+}
+
+data "aws_availability_zones" "available" {
+}
+
+provider "aws" {
+  region = var.region
+}
+
+# resource "aws_key_pair" "key-terraform" {
+#   key_name   = "key-terraform"
+#   public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDMRIOV8wXxlO1EEUJpJIi6//4iptvH9RLGTVaJZonNQAycoLBC5SgynJ8My7fGHrtQ54m7LlEJjuCiWJkwyTSCG4PYdZcYx79uc0E9I+X+wI9yAAia3h7gquyQ8zmm4SpK04veq0U31HrmqDj1ZVRL/fwxEl8+ggl4h+27wzV9GiTG99gu+d5XRfuL4QzkBSBt2YPRIq8iyNlyYI6h78PUhfGupM7cQokk3TIYjxqIOHBCVncsXskM4bqAdGMSvfG55yC6YFxH/IbgaaZRCvndTWNm8tjDfW679FvhlgceKB4IhWBDqbB8/B2zrOqAB9krg9O+XC3UFFMtiht9fZzwfxXmd6RsifXEXBwjtY7Ydf3S1y2JReoXAmZ/qFpNS4R19jwn7O+I9OOCsM6SfdyDm27ckv19OsFm7/MSZMilVBGYo/U20kFRVrmHTs9YCAzgr29+zbYv75u1hofNFrkOZtRbQrCEoSKeyx49PuydCivNzNMzMj77mLpIy7Rppa8= dhlim@jyglab.com"
+# }
+
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/24"
+
+  tags = {
+    Name = "terraform-101"
+  }
+}
+
+locals {
+  subnet = {
+    bastion = ["10.0.0.0/27"]
+    private = ["10.0.0.32/27"]
+    public = ["10.0.0.64/26", "10.0.0.128/26"]
+  }
+}
+
+resource "aws_subnet" "main_subnet_public" {
+  count = length(local.subnet.public)
+
+  vpc_id = aws_vpc.main.id
+  cidr_block = "${local.subnet.public[count.index]}"
+
+  availability_zone = "${data.aws_availability_zones.available.names[count.index]}"
+
+  tags = {
+    Name = "main_subnet_public_${count.index}"
+  }
+}
+
+resource "aws_subnet" "main_subnet_private" {
+  vpc_id = aws_vpc.main.id
+  cidr_block = "${local.subnet.private[0]}"
+
+  availability_zone = "${data.aws_availability_zones.available.names[1]}"
+  
+  tags = {
+    Name = "main_subnet_private"
+  }
+}
+
+resource "aws_subnet" "main_subnet_bastion" {
+  vpc_id = aws_vpc.main.id
+  cidr_block = "${local.subnet.bastion[0]}"
+
+  availability_zone = "${data.aws_availability_zones.available.names[0]}"
+  
+  tags = {
+    Name = "main_subnet_bastion"
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "main"
+  }
+}
+
+resource "aws_route_table" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    "Name" = "main"
+  }
+}
+
+resource "aws_route_table_association" "rta_subnet_public" {
+  count = length(aws_subnet.main_subnet_public)
+
+  subnet_id      = aws_subnet.main_subnet_public[count.index].id
+  route_table_id = aws_route_table.main.id
+}
+
+resource "aws_route_table_association" "rta_subnet_private" {
+  subnet_id      = aws_subnet.main_subnet_private.id
+  route_table_id = aws_route_table.main.id
+}
+
+resource "aws_route_table_association" "rta_subnet_bastion" {
+  subnet_id      = aws_subnet.main_subnet_bastion.id
+  route_table_id = aws_route_table.main.id
+}
+
+resource "aws_security_group" "sg_main_external" {
+  name = "sg_main_external"
+  description = "sg_main_external"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port = 8080
+    to_port = 8080
+    cidr_blocks = [ "0.0.0.0/0" ]
+    protocol = "tcp"
+  }
+
+  ingress {
+    from_port = 22
+    to_port = 22
+    cidr_blocks = [aws_subnet.main_subnet_bastion.cidr_block]
+    protocol = "tcp"
+  }
+}
+
+resource "aws_security_group" "sg_main_internal" {
+  name = "sg_main_internal"
+  description = "sg_main_internal"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port = 3306
+    to_port = 3306
+    cidr_blocks = aws_subnet.main_subnet_public.*.cidr_block
+    protocol = "tcp"
+  }
+
+  ingress {
+    from_port = 22
+    to_port = 22
+    cidr_blocks = [aws_subnet.main_subnet_bastion.cidr_block]
+    protocol = "tcp"
+  }
+}
+
+data "http" "myip" {
+  url = "http://ipv4.icanhazip.com"
+}
+
+resource "aws_security_group" "sg_main_bastion" {
+  name = "sg_main_bastion"
+  description = "sg_main_bastion"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port = 22
+    to_port = 22
+    protocol = "tcp"
+    cidr_blocks = [
+      "${chomp(data.http.myip.body)}/32",
+      "0.0.0.0/0"
+    ]
+  }
+}
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+
+resource "aws_instance" "web" {
+  ami = "${data.aws_ami.ubuntu.id}"
+  instance_type = "t2.micro"
+  key_name = aws_key_pair.key-terraform.key_name
+  subnet_id = aws_subnet.main_subnet_public[0].id
+  associate_public_ip_address = true
+
+  vpc_security_group_ids = [
+    aws_security_group.sg_main_external.id
+  ]
+
+  tags = {
+    "Name" = "ec2-web"
+  }
+}
+
+resource "aws_instance" "db" {
+  ami = data.aws_ami.ubuntu.id
+  instance_type = "t3.micro"
+  key_name = aws_key_pair.key-terraform.key_name
+  subnet_id = aws_subnet.main_subnet_private.id
+
+
+  vpc_security_group_ids = [
+    aws_security_group.sg_main_internal.id
+  ]
+
+  tags = {
+    "Name" = "ec2-db"
+  }
+}
+
+resource "aws_instance" "bastion" {
+  ami = data.aws_ami.ubuntu.id
+  instance_type = "t2.micro"
+  subnet_id = aws_subnet.main_subnet_bastion.id
+  associate_public_ip_address = true
+
+  key_name = "test-EC2-key"
+
+  vpc_security_group_ids = [
+    aws_security_group.sg_main_bastion.id
+  ]
+
+  # user_data = <<-EOF
+  #   #!/bin/bash
+  #   sudo amazon-linux-extras install nginx1.12 -y
+  #   sudo nginx
+  # EOF
+
+  tags = {
+    "Name" = "ec2-bastion"
+  }
+}
+
+output "ec2-bastion-public-id" {
+  value = aws_instance.bastion.public_ip
+}
